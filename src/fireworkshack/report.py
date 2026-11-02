@@ -490,7 +490,7 @@ def _measured_chart(report, path):
             ax.text(
                 known + held + 0.03,
                 i,
-                f"${known:.4f} estimate + ${held:.3f} held",
+                f"{known:.4f} estimate + {held:.3f} held",
                 va="center",
                 fontsize=9,
                 color="#526476",

@@ -101,6 +101,13 @@ def test_dry_run_has_exact_cost_and_never_constructs_client():
     assert Decimal(result["maximum_training_usd"]) == Decimal("0.00095616")
 
 
+def test_full_batch_recovery_is_one_update_with_documented_wait():
+    c = config()
+    c["training"].update(batch_size=64, timeout_seconds=1800)
+    plan = train_sft(c, data(), State(), dry_run=True)
+    assert plan["rows"] == 64 and plan["steps"] == 1
+
+
 @pytest.mark.parametrize(
     "setting,value",
     [

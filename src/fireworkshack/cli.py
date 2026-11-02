@@ -92,13 +92,25 @@ def main(argv=None):
                 )
             result = preflight(config, os.environ)
         elif args.command == "report":
-            from .runner import CombinedLedger
+            from .runner import CombinedLedger, LedgerGroup
 
             states = {
                 provider: RunState(args.run_dir / (provider + "-events.jsonl"))
                 for provider in ("fireworks", "refuseless")
                 if (args.run_dir / (provider + "-events.jsonl")).exists()
             }
+            previous_path = args.run_dir / "previous-ledgers.json"
+            if previous_path.exists():
+                for provider, reference in _json(previous_path).items():
+                    raw = Path(reference["path"]).read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+                        raise ValueError("previous ledger hash differs")
+                    old = RunState(Path(reference["path"]))
+                    states[provider] = (
+                        LedgerGroup(states[provider], old)
+                        if provider in states
+                        else old
+                    )
             state = (
                 CombinedLedger(states)
                 if states

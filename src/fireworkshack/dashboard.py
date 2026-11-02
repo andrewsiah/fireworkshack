@@ -8,6 +8,7 @@ stale snapshot instead of an exception containing private file contents.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -147,12 +148,147 @@ def _read_events(path, errors):
     return []
 
 
-def _run_aggregates(run, errors, planned):
+def _verified_reference(root, binding, label, errors):
+    """Validate a frozen private reference before parsing any of its bytes."""
+    if not isinstance(binding, dict) or not isinstance(binding.get("path"), str):
+        errors.append(label + "_path_rejected")
+        return None
+    try:
+        path = (root / binding["path"]).resolve()
+        runs_root = (root / "runs").resolve()
+        if not path.is_relative_to(runs_root) or path == runs_root:
+            errors.append(label + "_path_rejected")
+            return None
+        expected = binding.get("sha256")
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            errors.append(label + "_integrity_mismatch")
+            return None
+        if path.stat().st_size > _EVENT_LIMIT:
+            errors.append(label + "_too_large")
+            return None
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != expected:
+            errors.append(label + "_integrity_mismatch")
+            return None
+        return path, content
+    except (OSError, ValueError, RuntimeError):
+        errors.append(label + "_unreadable")
+        return None
+
+
+def _generation_key(arm, result, fallback):
+    """Deduplicate reused records and live events for the same locked item."""
+    item = result.get("item_id")
+    if isinstance(item, str) and isinstance(result.get("protocol_hash"), str):
+        return arm, result["protocol_hash"], item
+    return arm, "operation", str(result.get("operation_id", fallback))
+
+
+def _reused_baselines(root, run, errors):
+    generations, reused_arms = {}, set()
+    if run is None:
+        return generations, reused_arms
+    index = _read_json(run / "baseline-sources.json", "baseline_sources", errors)
+    for arm in ("A", "C"):
+        for track in ("capability", "behavior"):
+            name = f"{arm}-{track}"
+            if name not in index:
+                continue
+            verified = _verified_reference(root, index[name], "baseline", errors)
+            if verified is None:
+                continue
+            try:
+                original = json.loads(verified[1], parse_constant=_invalid_constant)
+                copied = _read_json(
+                    run / (name + ".json"), "baseline_copy", errors, required=True
+                )
+                if (
+                    not isinstance(original, dict)
+                    or original.get("source") != "measured"
+                    or original.get("arm") != arm
+                    or copied.get("baseline_reused") is not True
+                    or copied.get("baseline_source_sha256") != index[name]["sha256"]
+                    or {
+                        k: v
+                        for k, v in copied.items()
+                        if k not in {"baseline_reused", "baseline_source_sha256"}
+                    }
+                    != original
+                ):
+                    errors.append("baseline_copy_integrity_mismatch")
+                    continue
+                results = original.get("results")
+                if not isinstance(results, list):
+                    errors.append("baseline_invalid_schema")
+                    continue
+                for number, result in enumerate(results):
+                    if (
+                        not isinstance(result, dict)
+                        or result.get("arm") != arm
+                        or result.get("source") != "measured"
+                        or result.get("status") not in ("completed", "error", "pending")
+                    ):
+                        errors.append("baseline_invalid_schema")
+                        continue
+                    generations[_generation_key(arm, result, name + str(number))] = (
+                        result["status"]
+                    )
+                    reused_arms.add(arm)
+            except (ValueError, TypeError, UnicodeError):
+                errors.append("baseline_invalid_json")
+    return generations, reused_arms
+
+
+def _previous_costs(root, run, cost, current_paths, errors):
+    if run is None:
+        return
+    index = _read_json(run / "previous-ledgers.json", "previous_ledgers", errors)
+    seen = set()
+    current_paths = {path.resolve() for path in current_paths}
+    for path in current_paths:
+        try:
+            if path.stat().st_size <= _EVENT_LIMIT:
+                seen.add(hashlib.sha256(path.read_bytes()).hexdigest())
+        except OSError:
+            errors.append("run_accounting_unavailable")
+    for provider in cost:
+        if provider not in index:
+            continue
+        verified = _verified_reference(root, index[provider], "previous_ledger", errors)
+        if verified is None:
+            continue
+        path, content = verified
+        digest = hashlib.sha256(content).hexdigest()
+        if path in current_paths or digest in seen:
+            continue
+        seen.add(digest)
+        try:
+            events = [
+                json.loads(line, parse_constant=_invalid_constant)
+                for line in content.splitlines()
+                if line.strip()
+            ]
+            if any(not isinstance(row, dict) for row in events):
+                raise ValueError("invalid ledger schema")
+            # Replay verified bytes, avoiding a second unverified file read.
+            _, spent, held = RunState._accounting(events)
+            settled = _number(str(spent), None)
+            reserved = _number(str(held), None)
+            if settled is None or reserved is None:
+                raise ValueError("invalid ledger amounts")
+            cost[provider]["settled"] += settled
+            cost[provider]["reserved"] += reserved
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            errors.append("previous_ledger_invalid_schema")
+
+
+def _run_aggregates(root, run, errors, planned):
     cost = {
         "fireworks": {"cap": None, "reserved": 0, "settled": 0},
         "refuseless": {"cap": None, "reserved": 0, "settled": 0},
     }
-    generations = {}
+    generations, reused_arms = _reused_baselines(root, run, errors)
+    files = []
     if run:
         try:
             files = list(run.glob("*-events.jsonl"))
@@ -182,10 +318,7 @@ def _run_aggregates(run, errors, planned):
                     "error",
                 }:
                     continue
-                key = (
-                    arm,
-                    str(result.get("operation_id", event.get("operation_id", index))),
-                )
+                key = _generation_key(arm, result, event.get("operation_id", index))
                 generations[key] = status
             provider = path.name.removesuffix("-events.jsonl")
             if provider not in cost or not events:
@@ -203,15 +336,14 @@ def _run_aggregates(run, errors, planned):
                 OSError,
             ):
                 errors.append("run_accounting_unavailable")
+    _previous_costs(root, run, cost, files, errors)
     arms = []
     for arm, name, method, provider in (
         ("A", "Original DeepSeek", "Original weights", "Fireworks"),
         ("B", "Our Fireworks LoRA", "Benign-response SFT", "Fireworks"),
         ("C", "Refuseless comparison", "Hosted modified checkpoint", "Refuseless"),
     ):
-        counts = Counter(
-            status for (arm_id, _), status in generations.items() if arm_id == arm
-        )
+        counts = Counter(status for key, status in generations.items() if key[0] == arm)
         status = "not_run"
         if counts["completed"] >= planned:
             status = "complete"
@@ -232,6 +364,14 @@ def _run_aggregates(run, errors, planned):
                 "planned": planned,
                 "failed": counts["error"],
                 "pending": counts["pending"],
+                "source": "reused baseline"
+                if arm in reused_arms
+                else "current run"
+                if counts
+                else "not run",
+                "provenance": "Verified prior-run baseline reused; no replay."
+                if arm in reused_arms
+                else "",
             }
         )
     return arms, cost
@@ -441,7 +581,7 @@ def build_status(root: Path) -> dict:
     )
     data = _data(summary)
     run = _latest_run(root, errors)
-    arms, cost = _run_aggregates(run, errors, sum(data["pilot"].values()))
+    arms, cost = _run_aggregates(root, run, errors, sum(data["pilot"].values()))
     runtime_cost = overlay.get("cost", {})
     runtime_cost = runtime_cost if isinstance(runtime_cost, dict) else {}
     for provider, values in cost.items():

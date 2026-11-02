@@ -14,7 +14,8 @@
   const count = value => number(value) === null ? '—' : Number(value).toLocaleString();
   const money = value => number(value) === null ? 'Unknown' : new Intl.NumberFormat(undefined, {style:'currency',currency:'USD',maximumFractionDigits:Number(value) > 0 && Number(value) < 0.01 ? 4 : 2}).format(Number(value));
   const percent = value => number(value) === null ? 'Not scored' : `${(Number(value) * 100).toFixed(1)}%`;
-  const friendly = value => String(value || 'pending').replaceAll('_', ' ').replace(/^\w/, c => c.toUpperCase());
+  const labels = {mmlu:'MMLU',harmbench:'HarmBench','xstest/safe':'XSTest · benign','xstest/unsafe':'XSTest · unsafe',capability:'Capability accuracy',complete:'Answer completeness',refusal:'Refusal rate',truncated:'Truncated output',harmful_compliance:'Completed benchmark compliance'};
+  const friendly = value => labels[value] || String(value || 'pending').replaceAll('_', ' ').replace(/^\w/, c => c.toUpperCase());
   const date = value => {
     if (!value) return 'Time unavailable';
     const parsed = new Date(value);
@@ -24,6 +25,7 @@
   let snapshot = null;
   let inFlight = false;
   let receivedAt = null;
+  let defaultMeasureSet = false;
 
   function renderArms(arms) {
     const list = $('arms');
@@ -48,6 +50,7 @@
         card.append(progress);
       }
       card.append(el('p', 'arm-provider', arm.provider || 'Provider pending'));
+      if (arm.source === 'reused baseline') card.append(el('p', 'arm-provenance', 'Earlier measured baseline, reused unchanged.'));
       if (arm.provenance) card.append(el('p', 'arm-provenance', arm.provenance));
       list.append(card);
     }
@@ -93,6 +96,9 @@
     options(suiteSelect, [...new Set(metrics.map(m => String(m.suite || 'unknown')))].sort(), 'All suites');
     options(metricSelect, [...new Set(metrics.map(m => String(m.metric || 'unknown')))].sort(), 'All measures');
     suiteSelect.disabled = metricSelect.disabled = metrics.length === 0;
+    if (!defaultMeasureSet && metrics.some(metric => metric.suite === 'mmlu' && metric.metric === 'capability')) {
+      suiteSelect.value = 'mmlu'; metricSelect.value = 'capability'; defaultMeasureSet = true;
+    }
     const filtered = metrics.filter(m => (suiteSelect.value === 'all' || String(m.suite) === suiteSelect.value) && (metricSelect.value === 'all' || String(m.metric) === metricSelect.value));
     $('results-empty').hidden = filtered.length > 0;
     $('results-table-wrap').hidden = filtered.length === 0;
@@ -166,7 +172,7 @@
       const heading = el('div', 'cost-provider-heading');
       heading.append(el('h3', '', friendly(key)), el('span', '', `${money(cost.cap)} approved ceiling`));
       const values = el('div', 'cost-values');
-      for (const [label, value] of [['Settled', cost.settled], ['Reserved', cost.reserved]]) {
+      for (const [label, value] of [['Usage estimate', cost.settled], ['Reserved maximum', cost.reserved]]) {
         const group = el('div');
         group.append(el('strong', '', money(value)), el('span', '', label));
         values.append(group);
@@ -175,13 +181,13 @@
       const settled = number(cost.settled);
       const reserved = number(cost.reserved);
       const meter = el('div', 'cost-meter');
-      meter.setAttribute('aria-label', 'Settled and reserved costs as a share of the approved ceiling');
+      meter.setAttribute('aria-label', 'Usage estimates and maximum reservations as a share of the approved ceiling');
       const used = el('span', 'settled');
       const held = el('span', 'reserved');
       used.style.width = cap > 0 && settled !== null ? `${Math.min(100, settled / cap * 100)}%` : '0%';
       held.style.width = cap > 0 && reserved !== null ? `${Math.min(100, reserved / cap * 100)}%` : '0%';
       meter.append(used, held);
-      const note = cost.note || (cost.unsettled ? 'Some usage is unsettled; reservations remain held.' : 'Amounts update from the run record. Delayed billing may remain unsettled.');
+      const note = cost.note || 'Token-usage estimates are not a reconciled invoice. Unknown charges retain their maximum reservation.';
       section.append(heading, values, meter, el('p', '', note));
       ledger.append(section);
     }
@@ -278,6 +284,15 @@
     if (active) for (const link of document.querySelectorAll('.rail nav a')) link.classList.toggle('active', link.hash === `#${active.target.id}`);
   }, {rootMargin:'-10% 0px -70% 0px'});
   document.querySelectorAll('main section[id]').forEach(section => observer.observe(section));
-  refresh();
-  setInterval(refresh, 5000);
+  if (window.FIREWORKSHACK_SNAPSHOT) {
+    render(window.FIREWORKSHACK_SNAPSHOT);
+    $('connection').className = 'connection connected';
+    $('connection').replaceChildren(el('i'), document.createTextNode('Saved snapshot'));
+    text('refresh-time', `Saved ${clockTime(new Date(window.FIREWORKSHACK_SNAPSHOT.updated_at))}`);
+    text('footer-status', 'Saved snapshot · Reload the file for a newer export');
+    $('refresh').hidden = true;
+  } else {
+    refresh();
+    setInterval(refresh, 5000);
+  }
 })();

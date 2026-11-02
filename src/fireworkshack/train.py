@@ -54,12 +54,12 @@ def wait_for_training_phase(
     if (
         isinstance(timeout_seconds, bool)
         or not math.isfinite(timeout_seconds)
-        or not 0 < timeout_seconds <= 600
+        or not 0 < timeout_seconds <= 3600
         or not math.isfinite(heartbeat_seconds)
         or heartbeat_seconds <= 0
     ):
         raise TrainingNotReady(
-            "Training phase wait must be positive and at most600 seconds"
+            "Training phase wait must be positive and at most3600 seconds"
         )
     started = time.monotonic()
     limit = started + timeout_seconds
@@ -364,10 +364,10 @@ def _validate(config: dict, data: dict) -> tuple[dict, list[dict], int]:
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
         or not math.isfinite(timeout)
-        or not 0 < timeout <= 600
+        or not 0 < timeout <= 3600
     ):
         raise TrainingNotReady(
-            "Training timeout_seconds must be positive and at most600"
+            "Training timeout_seconds must be positive and at most3600"
         )
     return c, rows, total
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 from contextlib import contextmanager
@@ -393,3 +394,141 @@ def test_invalid_overlay_cap_stays_unknown(tmp_path, cap):
         tmp_path / ".local/dashboard-state.json", {"cost": {"fireworks": {"cap": cap}}}
     )
     assert build_status(tmp_path)["cost"]["fireworks"]["cap"] is None
+
+
+def write_events(path, events):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row) for row in events))
+    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def recovered_baselines(root, run):
+    bindings = {}
+    for arm in ["A", "C"]:
+        for track, count in [("capability", 57), ("behavior", 32)]:
+            name = f"{arm}-{track}"
+            original = {
+                "arm": arm,
+                "source": "measured",
+                "results": [
+                    {
+                        "item_id": f"{track}-{n}",
+                        "operation_id": f"{arm}-{track}-old-{n}",
+                        "protocol_hash": track,
+                        "status": "completed",
+                        "arm": arm,
+                        "source": "measured",
+                    }
+                    for n in range(count)
+                ],
+            }
+            path = root / "runs/previous" / f"{name}.json"
+            put_json(path, original)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            bindings[name] = {"path": str(path), "sha256": sha}
+            put_json(
+                run / f"{name}.json",
+                {**original, "baseline_reused": True, "baseline_source_sha256": sha},
+            )
+    put_json(run / "baseline-sources.json", bindings)
+    return bindings
+
+
+def test_recovery_reuses_verified_baseline_counts_and_rolls_up_costs_once(tmp_path):
+    run = tmp_path / "runs/recovery"
+    recovered_baselines(tmp_path, run)
+    prior_fw = write_events(
+        tmp_path / "runs/previous/fireworks-events.jsonl",
+        [
+            {"type": "reserve", "operation_id": "old-known", "maximum_usd": "2"},
+            {"type": "settle", "operation_id": "old-known", "actual_usd": "0.5"},
+            {"type": "reserve", "operation_id": "old-unknown", "maximum_usd": "3"},
+        ],
+    )
+    prior_rf = write_events(
+        tmp_path / "runs/previous/refuseless-events.jsonl",
+        [
+            {"type": "reserve", "operation_id": "old-rf", "maximum_usd": "0.1"},
+            {"type": "settle", "operation_id": "old-rf", "actual_usd": "0.02"},
+        ],
+    )
+    put_json(
+        run / "previous-ledgers.json", {"fireworks": prior_fw, "refuseless": prior_rf}
+    )
+    write_events(
+        run / "fireworks-events.jsonl",
+        [
+            {"type": "reserve", "operation_id": "new-step", "maximum_usd": "1"},
+            {
+                "type": "generation",
+                "result": {
+                    "arm": "A",
+                    "item_id": "capability-0",
+                    "operation_id": "new-duplicate",
+                    "protocol_hash": "capability",
+                    "status": "completed",
+                    "source": "measured",
+                },
+            },
+        ],
+    )
+    put_json(run / "controller.json", {"run_id": run.name, "status": "starting"})
+    snapshot = build_status(tmp_path)
+    assert [row["completed"] for row in snapshot["arms"]] == [89, 0, 89]
+    assert snapshot["arms"][0]["source"] == "reused baseline"
+    assert snapshot["arms"][2]["source"] == "reused baseline"
+    assert snapshot["cost"]["fireworks"]["reserved"] == pytest.approx(4)
+    assert snapshot["cost"]["fireworks"]["settled"] == pytest.approx(0.5)
+    assert snapshot["cost"]["refuseless"]["settled"] == pytest.approx(0.02)
+    text = json.dumps(snapshot)
+    assert str(tmp_path) not in text
+    assert "new-duplicate" not in text
+
+
+def test_previous_ledger_hash_and_containment_are_required(tmp_path):
+    run = tmp_path / "runs/recovery"
+    put_json(run / "controller.json", {"status": "starting"})
+    outside = write_events(
+        tmp_path / "private-events.jsonl",
+        [{"type": "reserve", "operation_id": "PRIVATE_OP", "maximum_usd": "100"}],
+    )
+    inside = write_events(
+        tmp_path / "runs/previous/fireworks-events.jsonl",
+        [{"type": "reserve", "operation_id": "PRIVATE_OP", "maximum_usd": "100"}],
+    )
+    inside["sha256"] = "0" * 64
+    put_json(
+        run / "previous-ledgers.json", {"fireworks": inside, "refuseless": outside}
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["stale"] is True
+    assert "previous_ledger_integrity_mismatch" in snapshot["errors"]
+    assert "previous_ledger_path_rejected" in snapshot["errors"]
+    assert snapshot["cost"]["fireworks"]["reserved"] == 0
+    assert snapshot["cost"]["refuseless"]["reserved"] == 0
+    assert "PRIVATE_OP" not in json.dumps(snapshot)
+
+
+def test_previous_ledger_same_hash_is_not_counted_twice(tmp_path):
+    run = tmp_path / "runs/recovery"
+    put_json(run / "controller.json", {"status": "starting"})
+    prior = write_events(
+        tmp_path / "runs/previous/fireworks-events.jsonl",
+        [{"type": "reserve", "operation_id": "old", "maximum_usd": "1"}],
+    )
+    put_json(run / "previous-ledgers.json", {"fireworks": prior, "refuseless": prior})
+    snapshot = build_status(tmp_path)
+    assert sum(value["reserved"] for value in snapshot["cost"].values()) == 1
+
+
+def test_reused_baseline_mutation_cannot_spoof_verified_counts(tmp_path):
+    run = tmp_path / "runs/recovery"
+    bindings = recovered_baselines(tmp_path, run)
+    put_json(run / "controller.json", {"run_id": run.name, "status": "starting"})
+    source = bindings["A-capability"]["path"]
+    with open(source, "a") as file:
+        file.write(" ")
+    snapshot = build_status(tmp_path)
+    assert snapshot["stale"] is True
+    assert "baseline_integrity_mismatch" in snapshot["errors"]
+    assert snapshot["arms"][0]["completed"] == 32

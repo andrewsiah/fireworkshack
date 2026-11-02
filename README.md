@@ -39,6 +39,14 @@ python -m fireworkshack.dashboard --port 8765
 
 Open [the local dashboard](http://127.0.0.1:8765). When using a remote VM, use the host's supported port forwarding. The dashboard is read-only, serves only its own assets and aggregate status, and refreshes every five seconds. It never exposes credentials, dataset content or raw generations. It has no training or purchasing controls.
 
+For a self-contained, explicitly dated HTML snapshot without a server connection:
+
+```bash
+python scripts/export_dashboard.py --output outputs/dashboard.html
+```
+
+The snapshot embeds sanitized aggregate data and all assets. It supports filtering offline and clearly marks itself as a saved snapshot.
+
 Offline preflight checks only the environment passed to that process; a protected credential file is not the same as an exported variable. Approved live execution loads the separately provisioned owner-only Fireworks and Refuseless credential files. Never put values in public configuration.
 
 The data preparation script requires existing Hugging Face access, a reviewed private manifest and cached pinned tokenizer assets. It never accepts dataset conditions. See [the continuation checklist](HANDOFF.md) before preparing real data.
@@ -62,6 +70,8 @@ fireworkshack run --config .local/pilot-plan.yaml \
 This command executes C, A, one SFT pass and B, exports an aggregate report, and deletes the owned session under the approved cleanup policy. The controller stops on the first endpoint error or uncertain update. It will not automatically restart an existing controller run; inspect the private event log and provider session before any recovery.
 
 Fireworks SDK 1.2.30's sampler can make up to seven internal attempts. The controller reserves the entire bound and retains it when total usage is unknown. Final-attempt token counts are not total billed usage. Session capacity and protocol behavior are verified only by the actual run, not by the model catalog.
+
+Training future waits emit local phase heartbeats without resubmitting remote operations. A local timeout does not cancel remote work. Recovery requires reconciliation of the old session and hash-bound prior results; completed baselines may be reused under an explicitly resolved recovery configuration. Prior reservations remain included in cumulative cost bounds. The controller never silently restarts an uncertain optimizer update.
 
 Behavior labels require a versioned per-output audit; nonrefusal alone never means completed harmful compliance. See [the scoring protocol](docs/scoring-protocol.md). Missing outputs and unjudged items remain visible in denominators.
 

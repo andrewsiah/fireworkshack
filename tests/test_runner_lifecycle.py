@@ -10,6 +10,9 @@ from fireworkshack import runner
 
 @pytest.fixture
 def pilot(monkeypatch, tmp_path):
+    # Unit fixtures must not contend with a real controller's checkout lease.
+    # The actual exclusive lease is covered independently in test_runner.py.
+    monkeypatch.setattr(runner, "run_pilot", runner._run_pilot)
     service = SimpleNamespace(training_session_id="synthetic-session", deleted=False)
     captured_arms = []
 
@@ -114,13 +117,25 @@ def test_sdk_arms_force_complete_attempt_reservation(pilot):
     assert all(arm["usage_accounts_for_all_attempts"] is False for arm in sdk_arms)
 
 
-def test_recovery_does_not_replay_paid_baselines(pilot,monkeypatch):
-    config,approval,_service,captured,directory=pilot
-    config['baseline_files']={'explicit_recovery':True}
-    records=[(arm,track,{'arm':arm,'source':'measured','scores':[],'baseline_source_sha256':'test'})
-             for arm in ('A','C') for track in ('capability','behavior')]
-    monkeypatch.setattr(runner,'verify_recovery_baselines',lambda *_args:records)
-    runner.run_pilot(config,directory,approval)
-    assert captured and {a['name'] for a in captured}=={'B'}
-    assert (directory/'A-capability.json').exists()
-    assert (directory/'C-behavior.json').exists()
+def test_recovery_does_not_replay_paid_baselines(pilot, monkeypatch):
+    config, approval, _service, captured, directory = pilot
+    config["baseline_files"] = {"explicit_recovery": True}
+    records = [
+        (
+            arm,
+            track,
+            {
+                "arm": arm,
+                "source": "measured",
+                "scores": [],
+                "baseline_source_sha256": "test",
+            },
+        )
+        for arm in ("A", "C")
+        for track in ("capability", "behavior")
+    ]
+    monkeypatch.setattr(runner, "verify_recovery_baselines", lambda *_args: records)
+    runner.run_pilot(config, directory, approval)
+    assert captured and {a["name"] for a in captured} == {"B"}
+    assert (directory / "A-capability.json").exists()
+    assert (directory / "C-behavior.json").exists()
