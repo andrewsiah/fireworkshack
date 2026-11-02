@@ -1,0 +1,29 @@
+# Secrets and local agent state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+.claude/
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+# Runtime and potentially sensitive / licensed artifacts
+.local/
+data/
+runs/
+checkpoints/
+outputs/
+logs/
+*.log
+*.safetensors
+*.pt
+*.pth
+.DS_Store
