@@ -1,5 +1,7 @@
 # DeepSeek comparison design
 
+**Historical proposed design.** The authorized pilot has now completed; the [measured report](../reports/2026-11-02-pilot/README.md) is authoritative for actual settings, Refuseless substitution/provenance, one-update recovery, budget, results and cleanup. Statements below about unapproved or untested execution describe the earlier planning checkpoint, not current run status.
+
 Research checkpoint: November 2, 2026. Provider behavior and pricing must be revalidated before execution.
 
 ## Question and scope

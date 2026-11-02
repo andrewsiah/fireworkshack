@@ -1,5 +1,15 @@
 # Continuation checklist
 
+## Completed measured pilot — November 2, 2026
+
+Canonical task AND-1174; execution child AND-1178. See [the reviewed result report](reports/2026-11-02-pilot/README.md), aggregate JSON/CSV and actual chart. Three arms completed 89 requests each without request errors. All scored 48/57 MMLU. The final rank-8 LoRA trained one epoch on 64 benign rows using **batch 64, one update**, a disclosed deviation from eight minibatch updates. It matched the base's pilot correctness and aggregate audited behavior outcomes; no improvement demonstrated. Refuseless has unverified exact Dealign provenance and many truncated outputs.
+
+Private recovery evidence lives in ignored `runs/pilot-fullbatch-20261102/`: final controller, immutable ledgers, source-bound reused baselines, saved stage outputs, 96-label combined audit, training/checkpoint records and independent cleanup verification. Earlier attempts remain in separate ignored run directories; do not replay them. All owned sessions were verified expired, controller exited, checkpoint not retained. No run remains to resume.
+
+Across attempts, Fireworks holds $4.05639540 (training $0.07654260; inference $3.97985280); actual billed total remains unknown. Refuseless token-usage estimate $0.00756624 agrees with the account decrease within rounding. User authorized $50/$10 caps and explicitly authorized routine recoveries without repeated approval; no deployment, purchase or additional experiment was performed. Do not infer a need to launch another run from the historical proposed plan below.
+
+Local read-only dashboard: `http://127.0.0.1:8765`, PID recorded in ignored `.local/dashboard.pid`. The self-contained HTML snapshot can be regenerated with `scripts/export_dashboard.py`; the dashboard is intentionally left running for the user. Final report gives exact timing, protocol deviations, source revisions and limitations. Keep all secrets, raw data/responses, session/checkpoint handles and private ledgers outside Git.
+
 This repository now contains a bounded Python controller, mocked checks and a read-only local HTML dashboard. Read the design, implementation plan, current canonical task journal and any existing private run state before execution. A successful offline check is not a model-performance result.
 
 ## Implementation checkpoint

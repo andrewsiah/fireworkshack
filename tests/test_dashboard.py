@@ -304,6 +304,7 @@ def test_live_events_override_old_preparation_headline_without_implying_training
 def test_training_headline_uses_actual_completed_step_events(tmp_path):
     run = tmp_path / "runs/pilot-1"
     put_json(run / "controller.json", {"status": "in_progress"})
+    put_json(run / "training-plan.json", {"steps": 8})
     (run / "fireworks-events.jsonl").write_text(
         "\n".join(
             json.dumps(e)
@@ -360,6 +361,41 @@ def test_invalid_controller_status_is_a_stale_source_not_server_error(tmp_path):
     assert snapshot["stale"] is True
     assert "run_controller_invalid_schema" in snapshot["errors"]
     assert "PRIVATE_CREDENTIAL" not in json.dumps(snapshot)
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_reported_status_requires_all_three_behavior_audits(tmp_path, complete):
+    put_json(
+        tmp_path / ".local/dashboard-state.json",
+        {"headline": "No observed LoRA gain", "summary": "Measured pilot conclusion."},
+    )
+    put_json(
+        tmp_path / "runs/pilot-1/controller.json", {"status": "completed_generations"}
+    )
+    metrics = [
+        {
+            "arm": arm,
+            "suite": suite,
+            "metric": "refusal",
+            "successes": 0,
+            "scored": 8,
+            "total": 8,
+            "unknown": 0,
+        }
+        for arm in ("A", "B", "C")
+        for suite in ("harmbench", "xstest/safe", "xstest/unsafe")
+    ]
+    if not complete:
+        metrics[-1]["scored"] = 0
+    put_json(
+        tmp_path / "runs/pilot-1/report/summary.json",
+        {"source": "measured", "metrics": metrics},
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["status"] == ("reported" if complete else "completed_generations")
+    assert snapshot["headline"] == (
+        "No observed LoRA gain" if complete else "Model generations complete"
+    )
 
 
 def test_runtime_caps_and_private_task_link_have_no_public_defaults(tmp_path):
@@ -532,3 +568,44 @@ def test_reused_baseline_mutation_cannot_spoof_verified_counts(tmp_path):
     assert snapshot["stale"] is True
     assert "baseline_integrity_mismatch" in snapshot["errors"]
     assert snapshot["arms"][0]["completed"] == 32
+
+
+@pytest.mark.parametrize("completed", [0, 1])
+def test_full_batch_training_progress_uses_one_step_run_plan(tmp_path, completed):
+    run = tmp_path / "runs/full-batch"
+    put_json(run / "controller.json", {"status": "in_progress"})
+    put_json(
+        run / "training-plan.json", {"steps": 1, "batch_size": 64, "train_tokens": 8173}
+    )
+    kind = "training_step_complete" if completed else "training_step_intent"
+    write_events(run / "fireworks-events.jsonl", [{"type": kind, "step": 1}])
+    snapshot = build_status(tmp_path)
+    assert snapshot["headline"] == f"Training: {completed} of 1 steps complete"
+    assert "of 8" not in snapshot["headline"]
+
+
+def test_b_evaluation_progress_replaces_completed_full_batch_training(tmp_path):
+    run = tmp_path / "runs/full-batch"
+    put_json(run / "controller.json", {"status": "in_progress"})
+    put_json(run / "training-plan.json", {"steps": 1})
+    write_events(
+        run / "fireworks-events.jsonl",
+        [
+            {
+                "utc": "2026-11-02T21:00:00Z",
+                "type": "training_step_complete",
+                "step": 1,
+            },
+            {
+                "utc": "2026-11-02T21:00:01Z",
+                "type": "generation",
+                "result": {
+                    "arm": "B",
+                    "status": "completed",
+                    "operation_id": "synthetic",
+                    "source": "measured",
+                },
+            },
+        ],
+    )
+    assert build_status(tmp_path)["headline"] == "Evaluating B: 1 of 89 complete"

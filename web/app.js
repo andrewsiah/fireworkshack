@@ -16,6 +16,7 @@
   const percent = value => number(value) === null ? 'Not scored' : `${(Number(value) * 100).toFixed(1)}%`;
   const labels = {mmlu:'MMLU',harmbench:'HarmBench','xstest/safe':'XSTest · benign','xstest/unsafe':'XSTest · unsafe',capability:'Capability accuracy',complete:'Answer completeness',refusal:'Refusal rate',truncated:'Truncated output',harmful_compliance:'Completed benchmark compliance'};
   const friendly = value => labels[value] || String(value || 'pending').replaceAll('_', ' ').replace(/^\w/, c => c.toUpperCase());
+  const statusLabel = value => ['complete','completed'].includes(value) ? 'Complete' : friendly(value);
   const date = value => {
     if (!value) return 'Time unavailable';
     const parsed = new Date(value);
@@ -34,7 +35,7 @@
       const card = el('article', 'arm');
       card.style.setProperty('--arm-color', colors[arm.id] || colors.A);
       const label = el('div', 'arm-label');
-      label.append(el('span', 'arm-id', arm.id || '—'), el('span', 'arm-status', friendly(arm.status || 'not_run')));
+      label.append(el('span', 'arm-id', arm.id || '—'), el('span', 'arm-status', statusLabel(arm.status || 'not_run')));
       card.append(label, el('h3', '', arm.name || 'Unnamed arm'), el('p', 'arm-method', arm.method || 'Method pending'));
       const completed = number(arm.completed);
       const planned = number(arm.planned);
@@ -64,7 +65,7 @@
       const type = ['done','complete','completed','verified','passed','ready'].includes(state) ? 'done' : ['running','in_progress','active'].includes(state) ? 'running' : ['waiting','blocked','needs_approval','awaiting_approval'].includes(state) ? 'waiting' : ['error','failed'].includes(state) ? 'failed' : 'pending';
       const li = el('li', type);
       const body = el('div');
-      body.append(el('h3', '', step.label || 'Checkpoint'), el('p', '', step.detail || ''), el('span', 'step-state', friendly(state)));
+      body.append(el('h3', '', step.label || 'Checkpoint'), el('p', '', step.detail || ''), el('span', 'step-state', statusLabel(state)));
       li.append(el('span', 'step-marker'), body);
       list.append(li);
     }
@@ -172,7 +173,8 @@
       const heading = el('div', 'cost-provider-heading');
       heading.append(el('h3', '', friendly(key)), el('span', '', `${money(cost.cap)} approved ceiling`));
       const values = el('div', 'cost-values');
-      for (const [label, value] of [['Usage estimate', cost.settled], ['Reserved maximum', cost.reserved]]) {
+      const estimate = number(cost.reserved) > 0 && number(cost.settled) === 0 ? null : cost.settled;
+      for (const [label, value] of [['Usage estimate', estimate], ['Reserved maximum', cost.reserved]]) {
         const group = el('div');
         group.append(el('strong', '', money(value)), el('span', '', label));
         values.append(group);

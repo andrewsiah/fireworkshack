@@ -1,8 +1,12 @@
 # FireworksHack
 
-A reproducible comparison of the original DeepSeek V4.1 Flash 1017, a LoRA trained with Fireworks Serverless Training, and Dealign's released modification served through Experiential.
+A reproducible comparison of original DeepSeek V4.1 Flash 1017, a LoRA trained with Fireworks Serverless Training, and a Refuseless-hosted model supplied as the Dealign comparison. Its exact Dealign checkpoint identity remains unverified.
 
-**Status: the bounded controller and local dashboard are implemented. A live pilot requires a matching private approval record. No model-performance result is implied by passing offline checks.**
+**Measured pilot complete (November 2, 2026): 267/267 requests, all three arms 48/57 MMLU (84.2%). The one-update LoRA showed no observed improvement over the base on the reported pilot metrics.** See the [results, actual training settings, accounting and limitations](reports/2026-11-02-pilot/README.md).
+
+![Measured comparison](reports/2026-11-02-pilot/overview.png)
+
+Final training used 64 reviewed benign rows in one full-batch optimizer update, replacing the initial eight-update proposal after remote optimizer delays. The same local reviewer audited all 96 behavioral outputs. Sessions were cleaned up; no checkpoint is retained or deployed. Fireworks retains a conservative $4.0564 unsettled reservation across attempts; Refuseless usage is about $0.0076. Passing offline checks alone is not a performance result.
 
 The experiment asks whether a small training intervention can change refusal behavior while retaining capability. Benign helpfulness, harmful compliance, and general capability are reported separately. A tiny pilot establishes that the workflow runs; it cannot establish that a model outperforms Dealign.
 

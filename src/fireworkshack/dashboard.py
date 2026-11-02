@@ -525,6 +525,17 @@ def _execution_status(run, arms, errors):
             "progress_status": "running",
         }
     if kind in {"training_step_intent", "training_step_complete"}:
+        plan = _read_json(run / "training-plan.json", "training_plan", errors)
+        planned_steps = _number(plan.get("steps"), None, integral=True)
+        if planned_steps is not None and planned_steps < 1:
+            planned_steps = None
+        if "steps" in plan and planned_steps is None:
+            errors.append("training_plan_invalid_schema")
+        headline = (
+            f"Training: {completed_step} of {planned_steps} steps complete"
+            if planned_steps is not None
+            else f"Training: {completed_step} steps complete · planned total unavailable"
+        )
         detail = (
             f"Optimizer step {intended_step} has a recorded intent; waiting for its completion."
             if intended_step > completed_step
@@ -532,7 +543,7 @@ def _execution_status(run, arms, errors):
         )
         return {
             "status": "running",
-            "headline": f"Training: {completed_step} of 8 steps complete",
+            "headline": headline,
             "summary": detail + " No post-training model comparison is claimed yet.",
             "progress_status": "running",
         }
@@ -606,6 +617,28 @@ def build_status(root: Path) -> dict:
     risks = overlay.get("risks", [])
     risks = risks if isinstance(risks, list) else []
     execution = _execution_status(run, arms, errors)
+    audited = {
+        (row["arm"], row["suite"])
+        for row in metrics
+        if row["metric"] == "refusal" and row["total"] and row["scored"] == row["total"]
+    }
+    if (
+        execution
+        and execution["status"] == "completed_generations"
+        and all(
+            (arm, suite) in audited
+            for arm in ("A", "B", "C")
+            for suite in ("harmbench", "xstest/safe", "xstest/unsafe")
+        )
+    ):
+        execution.update(
+            status="reported",
+            headline=overlay.get("headline", "Pilot measured and audited"),
+            summary=overlay.get(
+                "summary",
+                "All three arms are measured and behaviorally audited. Billing reconciliation remains separate.",
+            ),
+        )
     if execution:
         overlay = {
             **overlay,

@@ -73,6 +73,11 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
             groups.append((suite, suite_scores, total))
         for category, counts in evaluation.get("by_category", {}).items():
             base, _, stratum = category.partition("/")
+            if base == "mmlu":
+                # The pilot has one item per subject; summarize capability once.
+                # Subject strata must not produce behavioral metrics or crowd out
+                # the later arms in bounded dashboard responses.
+                continue
             selected = [
                 s
                 for s in scores
@@ -163,7 +168,7 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
         "interval",
     ]
     with paths["csv"].open("w") as file:
-        writer = csv.DictWriter(file, fieldnames=columns)
+        writer = csv.DictWriter(file, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
         writer.writerows(report["metrics"])
     lines = [
@@ -490,7 +495,9 @@ def _measured_chart(report, path):
             ax.text(
                 known + held + 0.03,
                 i,
-                f"{known:.4f} estimate + {held:.3f} held",
+                f"Usage unknown; {held:.3f} held"
+                if held and not known
+                else f"{known:.4f} estimate + {held:.3f} held",
                 va="center",
                 fontsize=9,
                 color="#526476",

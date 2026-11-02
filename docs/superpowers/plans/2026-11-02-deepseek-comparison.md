@@ -1,5 +1,7 @@
 # DeepSeek Hosted Comparison Implementation Plan
 
+**Execution checkpoint:** Implementation and the authorized pilot are complete. See [measured report](../../../reports/2026-11-02-pilot/README.md) for actual results, recovery deviations and cleanup. The unchecked steps below preserve the original proposed plan; they are not a current pending execution queue. Actual C used Refuseless with unverified exact Dealign identity; successful B used batch 64 / one optimizer update. No additional paid execution is scheduled.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This is the proposed native execution path; obtain user review before implementation.
 
 **Goal:** Build a bounded VM-controlled experiment comparing original DeepSeek 1017, a Fireworks-trained LoRA, and the hosted Dealign model under one evaluation protocol.

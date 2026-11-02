@@ -50,6 +50,7 @@ def test_partial_coverage_cannot_look_like_full_accuracy(tmp_path):
                 "by_suite": {
                     "mmlu": {"total": 57, "missing": 56, "completed": 1, "errors": 0}
                 },
+                "by_category": {"mmlu/astronomy": {"total": 1}},
                 "scores": [
                     {
                         "item_id": "mmlu:one",
@@ -67,6 +68,12 @@ def test_partial_coverage_cannot_look_like_full_accuracy(tmp_path):
     assert metric["total"] == 57
     assert metric["rate"] == pytest.approx(1 / 57)
     assert summary["coverage"][0]["missing"] == 56
+    assert all(row["suite"] == "mmlu" for row in summary["metrics"])
+    assert {row["metric"] for row in summary["metrics"]} == {
+        "capability",
+        "complete",
+        "truncated",
+    }
 
 
 def test_safe_and_unsafe_refusals_are_not_merged(tmp_path):
