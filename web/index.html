@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FireworksHack · Experiment notebook</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#overview">Skip to experiment</a>
+  <aside class="rail">
+    <a class="identity" href="#overview" aria-label="FireworksHack overview"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M6 6v24M18 6v24M30 6v24M6 12h12M18 24h12"/></svg><span>FireworksHack<small>Experiment notebook</small></span></a>
+    <p class="rail-description">A small training intervention, examined from three sides.</p>
+    <nav aria-label="Sections"><a href="#overview" class="active">Overview</a><a href="#experiment">Experiment map</a><a href="#progress">Live progress</a><a href="#data">Data & evaluation</a><a href="#results">Results</a><a href="#costs">Costs & limitations</a><a href="#updates">Research log</a></nav>
+    <div class="rail-footer"><span class="connection" id="connection"><i></i>Connecting</span><span id="refresh-time">Waiting for the first snapshot</span><button class="refresh" id="refresh" type="button">Refresh now</button></div>
+  </aside>
+  <main>
+    <div class="page-top"><span>DeepSeek V4.1 Flash 1017</span><div class="top-links" id="top-links"></div></div>
+    <div class="stale" id="stale" role="status" hidden>Connection interrupted. Showing the last received snapshot; retrying automatically.</div>
+    <section id="overview" class="overview">
+      <div class="overview-heading"><div><p class="study-label">Comparative post-training study</p><h1>A small intervention.<br>A measurable tradeoff.</h1></div><span class="status-pill" id="experiment-status">Loading experiment</span></div>
+      <p class="research-question">Can a small benign-response fine-tune reduce unnecessary refusals while preserving capability?</p>
+      <div class="summary-band"><div><h2 id="headline">Preparing the experiment</h2><p id="summary">Reading the current research snapshot. Measured results will appear only after evaluation runs.</p></div><div class="evidence-status"><span class="evidence-line" id="evidence-status">No measured model results</span><span id="updated-at">Snapshot pending</span></div></div>
+      <p class="scope-note">This pilot tests the workflow and benign overrefusal. It does not establish broad uncensoring, reproduce unpublished weight edits, or turn harmful compliance into a quality score.</p>
+    </section>
+
+    <section id="experiment" class="section">
+      <div class="section-heading"><h2>Three arms. One common evaluation.</h2><p>Compare the intervention, preserve the differences.</p></div>
+      <div class="experiment-arms" id="arms"><p class="muted">Loading model identities…</p></div>
+      <div class="convergence" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="evaluation-strip"><span class="evaluation-symbol" aria-hidden="true">≋</span><div><h3>Shared held-out evaluator</h3><p>Same item IDs, explicit reasoning settings, matched output limits, and separate behavior and capability measures.</p></div><a href="#results">Inspect results</a></div>
+      <details class="method"><summary>What would count as evidence of value?</summary><div class="method-content"><table><thead><tr><th>Question</th><th>Evidence to look for</th></tr></thead><tbody><tr><td>More helpful on benign requests?</td><td>Fewer unnecessary refusals with complete answers on safe XSTest items.</td></tr><tr><td>Capability retained?</td><td>Paired MMLU accuracy against the original model, with coverage and uncertainty.</td></tr><tr><td>Behavior changed safely?</td><td>Harmful compliance audited separately; incomplete reasoning and truncated answers remain visible.</td></tr><tr><td>Worth the intervention?</td><td>Measured improvement weighed against latency, training cost, and provider differences.</td></tr></tbody></table><p>Small pilot samples are exploratory. An untouched final set is reserved for later confirmation.</p></div></details>
+    </section>
+
+    <section id="progress" class="section">
+      <div class="section-heading"><h2>Where the experiment stands</h2><span class="verification" id="verification">Verification pending</span></div>
+      <ol class="progress-list" id="progress-list"><li class="pending"><span class="step-marker"></span><div><h3>Awaiting status snapshot</h3><p>Live checkpoints will appear here.</p></div></li></ol>
+    </section>
+
+    <section id="data" class="section">
+      <div class="section-heading"><h2>Small training set. Independent questions.</h2><p>Training, development, and confirmation stay separate.</p></div>
+      <div class="data-layout"><div class="training-block"><h3>Benign-response SFT</h3><div class="split-stats"><div><strong id="train-count">—</strong><span>training examples</span></div><div><strong id="dev-count">—</strong><span>development examples</span></div></div><dl class="data-facts"><div><dt>Rendered training tokens</dt><dd id="train-tokens">—</dd></div><div><dt>Longest selected example</dt><dd id="max-tokens">—</dd></div><div><dt>Reviewed examples</dt><dd id="reviewed-count">—</dd></div><div><dt>Rejected candidates</dt><dd id="rejected-count">—</dd></div></dl><p class="muted">Benign prompts, nonharmful responses, and no refusal responses. Content and raw generations stay private.</p></div><div class="evaluation-block"><h3>Locked pilot evaluation</h3><div class="suite-row"><div><strong>MMLU</strong><span>General capability</span></div><strong id="mmlu-count">—</strong></div><div class="suite-row"><div><strong>HarmBench</strong><span>Harmful-compliance audit</span></div><strong id="harmbench-count">—</strong></div><div class="suite-row"><div><strong>XSTest</strong><span>Benign overrefusal & unsafe contrasts</span></div><strong id="xstest-count">—</strong></div><div class="reserved-final"><span>Reserved for final confirmation</span><strong id="reserved-count">—</strong></div></div></div>
+    </section>
+
+    <section id="results" class="section results-section">
+      <div class="section-heading"><div><h2>Measured results</h2><p id="results-intro">No model performance has been measured yet.</p></div><div class="result-filters"><label>Suite<select id="suite-filter" disabled><option value="all">All suites</option></select></label><label>Measure<select id="metric-filter" disabled><option value="all">All measures</option></select></label></div></div>
+      <div class="results-empty" id="results-empty"><svg viewBox="0 0 360 70" aria-hidden="true"><path class="empty-grid" d="M15 56H345M15 28H345"/><path class="empty-axis" d="M15 5V56"/><circle cx="95" cy="56" r="5"/><circle cx="185" cy="56" r="5"/><circle cx="275" cy="56" r="5"/></svg><h3>Ready to measure. No scores to claim.</h3><p>Base, adapted, and modified-model results will appear here after real requests are scored. Missing results are shown as “not run,” never as zero accuracy.</p></div>
+      <div id="metric-chart" class="metric-chart" hidden></div>
+      <div class="table-scroll" id="results-table-wrap" hidden><table class="results-table"><thead><tr><th>Arm</th><th>Suite / measure</th><th>Score</th><th>Scored / total</th><th>Unknown</th><th>Interval</th></tr></thead><tbody id="results-table-body"></tbody></table></div>
+      <p class="result-footnote">Refusal, harmful compliance, answer completeness, and capability are distinct outcomes. Provider-reported and newly measured scores are never merged.</p>
+    </section>
+
+    <section id="costs" class="section">
+      <div class="section-heading"><h2>Cost and confidence</h2><p>Reservations are not settled charges.</p></div>
+      <div class="cost-layout"><div class="cost-ledger" id="cost-ledger"><p class="muted">Cost status will appear with the live snapshot.</p></div><div class="limitations"><h3>Read the result with these limits</h3><ul id="risks"><li>No measured model comparison yet.</li></ul></div></div>
+    </section>
+
+    <section id="updates" class="section updates-section"><div class="section-heading"><h2>Research log</h2><p>Meaningful changes, as they happen.</p></div><ol class="update-list" id="update-list"><li><span>No updates received yet.</span></li></ol></section>
+    <footer class="page-footer"><span>FireworksHack / Research in progress</span><span id="footer-status">Updates every 5 seconds</span></footer>
+  </main>
+</body>
+</html>

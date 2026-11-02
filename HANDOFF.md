@@ -1,6 +1,17 @@
 # Continuation checklist
 
-This repository currently contains planning documents only. Read the design and implementation plan before adding code.
+This repository now contains a bounded Python controller, mocked checks and a read-only local HTML dashboard. Read the design, implementation plan, current canonical task journal and any existing private run state before execution. A successful offline check is not a model-performance result.
+
+## Implementation checkpoint
+
+- Use `uv sync --locked` in the activated `.venv`; the lightweight `fireworks-ai[training-sdk]` extra avoids local GPU dependencies.
+- `fireworkshack preflight --offline` and `run --dry-run` make zero provider calls. Public config keeps paid execution disabled.
+- Dataset access and review are explicit; private manifests bind exact revisions, IDs and hashes. `scripts/prepare_private_data.py` requires existing gated access and content-bound review records. It freezes pilot IDs and reserves separate final confirmation.
+- Live entry is `run --execute` with exact private config/approval hashes. The exclusive controller lease and existing controller record prevent duplicate restarts. Unknown requests/optimizer updates require reconciliation.
+- A and B use the same training session, with base-only sampling before updates. Seven possible internal SDK sampling attempts are fully reserved; total billed usage remains unsettled until reconciled. No deployment is provisioned.
+- Reports preserve missing/unjudged coverage. Agent audit criteria are in `docs/scoring-protocol.md`; author-reported Dealign scores are not newly measured results.
+- Local dashboard: `python -m fireworkshack.dashboard --port 8765`. Serve only the fixed assets and sanitized aggregate API. Private data, raw outputs and credential files must never become static assets.
+- C currently uses the explicitly supplied Refuseless endpoint, with exact Dealign provenance unverified. Never silently fall back to another provider or claim an immutable revision from the catalog name.
 
 ## First actions
 

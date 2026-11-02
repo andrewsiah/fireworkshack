@@ -1,0 +1,60 @@
+# Proposed settings. A reviewed private approval record is required for paid work.
+run_id: pilot
+paid_execution: false
+budget_usd: null
+request_ceiling: 300
+deadline_utc: null
+max_retries: 0
+checkpoint_retention: delete_after_report
+data_manifest: data/manifests/training.json
+eval_manifest: data/manifests/evaluation.json
+dataset_revision: null
+arms:
+  A:
+    name: A
+    provider: fireworks
+    base_url: https://api.fireworks.ai/inference/v1
+    model: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    key_env: FIREWORKS_API_KEY
+    supported_reasoning: ['off', low, high, max]
+    pricing: null # Resolve exact selected sampling surface before paid approval.
+  B:
+    name: B
+    provider: fireworks_checkpoint
+    model: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    key_env: FIREWORKS_API_KEY
+    checkpoint: null
+  C:
+    name: C
+    provider: refuseless
+    base_url: https://api.refuseless.com/v1
+    model: deepseek-v4.1-flash-abliterated
+    key_env: REFUSELESS_API_KEY
+    provenance: user_attributed_dealign_unverified
+    supported_reasoning: ['off', low, high, max]
+    pricing:
+      input_per_million: '0.12'
+      output_per_million: '0.45'
+tracks:
+  capability:
+    reasoning: 'off'
+    temperature: 0
+    top_p: 1
+    max_tokens: 32
+    max_input_tokens: 4096
+    mmlu_scoring: generated_letter
+  behavior:
+    reasoning: 'off'
+    temperature: 0
+    top_p: 1
+    max_tokens: 512
+    max_input_tokens: 4096
+    mmlu_scoring: generated_letter
+training:
+  base_model: accounts/fireworks/models/deepseek-v4p1-flash-1017
+  rank: 8
+  epochs: 1
+  learning_rate: 0.0001
+  max_sequence_length: 1024
+  max_training_tokens: 65536
+  cookbook_revision: 57968a2237b663be33078d2747a28463983ae134
