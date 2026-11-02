@@ -32,7 +32,6 @@ _ASSETS = {
 _LINKS = {
     "repo": "https://github.com/andrewsiah/fireworkshack",
     "plan": "https://github.com/andrewsiah/fireworkshack/blob/codex/experiment-plan/docs/superpowers/plans/2026-11-02-deepseek-comparison.md",
-    "linear": "https://linear.app/new-york-ai-labs/issue/AND-1174",
 }
 
 
@@ -150,8 +149,8 @@ def _read_events(path, errors):
 
 def _run_aggregates(run, errors, planned):
     cost = {
-        "fireworks": {"cap": 50, "reserved": 0, "settled": 0},
-        "refuseless": {"cap": 10, "reserved": 0, "settled": 0},
+        "fireworks": {"cap": None, "reserved": 0, "settled": 0},
+        "refuseless": {"cap": None, "reserved": 0, "settled": 0},
     }
     generations = {}
     if run:
@@ -274,6 +273,162 @@ def _metrics(run, errors):
     return metrics
 
 
+def _execution_status(run, arms, errors):
+    """Derive the hero from durable operations, never from model answer text."""
+    if run is None:
+        return None
+    controller = _read_json(run / "controller.json", "run_controller", errors)
+    status = controller.get("status")
+    if status is not None and not isinstance(status, str):
+        errors.append("run_controller_invalid_schema")
+        return None
+    if status == "incomplete":
+        counts = "; ".join(
+            f"{arm['id']}: {arm['completed']}/{arm['planned']} collected"
+            for arm in arms
+        )
+        return {
+            "status": "incomplete",
+            "headline": "Pilot stopped with partial results",
+            "summary": counts
+            + ". Review recorded failures, reservations and exported partial results; unrun arms remain unmeasured.",
+            "progress_status": "failed",
+        }
+    if status in {"completed", "completed_generations"}:
+        return {
+            "status": status,
+            "headline": "Model generations complete",
+            "summary": "Generation collection has finished. Independent behavioral judging and billing reconciliation remain separate from request completion.",
+            "progress_status": "complete",
+        }
+    if status not in {"starting", "in_progress", "running"}:
+        return None
+    candidates = []
+    completed_step = intended_step = 0
+    observed = {
+        "generation",
+        "dispatch_intent",
+        "training_step_intent",
+        "training_step_complete",
+        "training_session_intent",
+        "training_session_allocated",
+        "training_session_created",
+        "checkpoint_saved",
+        "controller_failure",
+        "training_session_deleted",
+        "failed_session_deleted",
+        "session_finalized",
+    }
+    try:
+        paths = list(run.glob("*-events.jsonl"))
+        for path in paths:
+            fallback_time = path.stat().st_mtime
+            for index, event in enumerate(_read_events(path, errors)):
+                kind = event.get("type")
+                if not isinstance(kind, str) or kind not in observed:
+                    continue
+                arm = None
+                if kind == "generation":
+                    result = event.get("result", {})
+                    if not isinstance(result, dict) or result.get("source") not in (
+                        None,
+                        "measured",
+                    ):
+                        continue
+                    arm = result.get("arm")
+                elif kind == "dispatch_intent":
+                    arm = event.get("arm")
+                if kind in {"generation", "dispatch_intent"} and arm not in (
+                    "A",
+                    "B",
+                    "C",
+                ):
+                    continue
+                if kind == "training_step_complete":
+                    completed_step = max(
+                        completed_step, _number(event.get("step"), integral=True)
+                    )
+                elif kind == "training_step_intent":
+                    intended_step = max(
+                        intended_step, _number(event.get("step"), integral=True)
+                    )
+                event_time = fallback_time + index / 1_000_000
+                if isinstance(event.get("utc"), str):
+                    try:
+                        stamp = datetime.fromisoformat(
+                            event["utc"].replace("Z", "+00:00")
+                        )
+                        event_time = (
+                            stamp.replace(tzinfo=UTC).timestamp()
+                            if stamp.tzinfo is None
+                            else stamp.timestamp()
+                        )
+                    except (ValueError, OverflowError):
+                        pass
+                candidates.append((event_time, index, kind, arm))
+    except OSError:
+        errors.append("run_execution_unreadable")
+    if not candidates:
+        return {
+            "status": "running",
+            "headline": "Pilot starting",
+            "summary": "The controller has started; waiting for the first recorded provider operation.",
+            "progress_status": "running",
+        }
+    _, _, kind, arm_id = max(candidates)
+    if kind in {"generation", "dispatch_intent"}:
+        arm = next(row for row in arms if row["id"] == arm_id)
+        return {
+            "status": "running",
+            "headline": f"Evaluating {arm_id}: {arm['completed']} of {arm['planned']} complete",
+            "summary": "Collecting hosted model responses under the frozen protocol. Request completion is not a quality score; training and independent judging are tracked separately.",
+            "progress_status": "running",
+        }
+    if kind in {"training_step_intent", "training_step_complete"}:
+        detail = (
+            f"Optimizer step {intended_step} has a recorded intent; waiting for its completion."
+            if intended_step > completed_step
+            else "The recorded optimizer update completed; collecting the next training checkpoint."
+        )
+        return {
+            "status": "running",
+            "headline": f"Training: {completed_step} of 8 steps complete",
+            "summary": detail + " No post-training model comparison is claimed yet.",
+            "progress_status": "running",
+        }
+    if kind == "checkpoint_saved":
+        return {
+            "status": "running",
+            "headline": "Training checkpoint saved",
+            "summary": "The training checkpoint is recorded. Post-training evaluation must finish before drawing a model comparison.",
+            "progress_status": "running",
+        }
+    if kind == "controller_failure":
+        return {
+            "status": "incomplete",
+            "headline": "Pilot interrupted; finalizing records",
+            "summary": "A recorded controller failure stopped new work. Partial results are being exported and provider resources cleaned up.",
+            "progress_status": "failed",
+        }
+    if kind in {
+        "training_session_deleted",
+        "failed_session_deleted",
+        "session_finalized",
+    }:
+        return {
+            "status": "running",
+            "headline": "Finalizing pilot records",
+            "summary": "Session finalization was recorded; waiting for the controller's final outcome and aggregate report.",
+            "progress_status": "running",
+        }
+    return {
+        "status": "running",
+        "headline": "Preparing the Fireworks session",
+        "summary": "The controller is preparing the supported training and sampling session. This is not evidence that a training update has completed.",
+        "progress_status": "running",
+    }
+
+
 def build_status(root: Path) -> dict:
     """Read a fresh local aggregate snapshot; return only this explicit schema."""
     root = Path(root)
@@ -287,6 +442,20 @@ def build_status(root: Path) -> dict:
     data = _data(summary)
     run = _latest_run(root, errors)
     arms, cost = _run_aggregates(run, errors, sum(data["pilot"].values()))
+    runtime_cost = overlay.get("cost", {})
+    runtime_cost = runtime_cost if isinstance(runtime_cost, dict) else {}
+    for provider, values in cost.items():
+        supplied = runtime_cost.get(provider, {})
+        values["cap"] = (
+            _number(supplied.get("cap"), None) if isinstance(supplied, dict) else None
+        )
+    links = dict(_LINKS)
+    runtime_links = overlay.get("links", {})
+    task_link = runtime_links.get("linear") if isinstance(runtime_links, dict) else None
+    if isinstance(task_link, str) and re.fullmatch(
+        r"https://linear\.app/new-york-ai-labs/issue/AND-\d+(?:/[a-z0-9-]+)?", task_link
+    ):
+        links["linear"] = task_link
     metrics = _metrics(run, errors)
     verification = overlay.get("verification", {})
     verification = verification if isinstance(verification, dict) else {}
@@ -296,6 +465,29 @@ def build_status(root: Path) -> dict:
     updates = updates if isinstance(updates, list) else []
     risks = overlay.get("risks", [])
     risks = risks if isinstance(risks, list) else []
+    execution = _execution_status(run, arms, errors)
+    if execution:
+        overlay = {
+            **overlay,
+            **{key: execution[key] for key in ("status", "headline", "summary")},
+        }
+        progress = [dict(row) for row in progress if isinstance(row, dict)]
+        detail = execution["headline"] + ". " + execution["summary"]
+        matching = [
+            row
+            for row in progress
+            if str(row.get("label", "")).lower() in {"pilot execution", "execution"}
+        ]
+        if matching:
+            matching[0].update(status=execution["progress_status"], detail=detail)
+        else:
+            progress.append(
+                {
+                    "label": "Pilot execution",
+                    "status": execution["progress_status"],
+                    "detail": detail,
+                }
+            )
     return {
         "updated_at": datetime.now(UTC).isoformat(),
         "status": _text(overlay.get("status"), "prepared", limit=60),
@@ -337,7 +529,7 @@ def build_status(root: Path) -> dict:
         "risks": [
             _text(risk, limit=500) for risk in risks[:15] if isinstance(risk, str)
         ],
-        "links": dict(_LINKS),
+        "links": links,
         "stale": bool(errors),
         "errors": sorted(set(errors)),
     }

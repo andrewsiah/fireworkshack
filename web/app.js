@@ -7,6 +7,8 @@
     if (value !== undefined) node.textContent = value;
     return node;
   };
+  const userTimeZone = 'America/Los_Angeles';
+  const clockTime = value => value.toLocaleTimeString(undefined, {timeZone:userTimeZone,timeZoneName:'short'});
   const colors = {A: '#6f8694', B: '#087e83', C: '#315bd4'};
   const number = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value) : null;
   const count = value => number(value) === null ? '—' : Number(value).toLocaleString();
@@ -16,7 +18,7 @@
   const date = value => {
     if (!value) return 'Time unavailable';
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? 'Time unavailable' : parsed.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    return Number.isNaN(parsed.getTime()) ? 'Time unavailable' : parsed.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:userTimeZone,timeZoneName:'short'});
   };
   const text = (id, value) => { if ($(id)) $(id).textContent = value; };
   let snapshot = null;
@@ -31,7 +33,21 @@
       card.style.setProperty('--arm-color', colors[arm.id] || colors.A);
       const label = el('div', 'arm-label');
       label.append(el('span', 'arm-id', arm.id || '—'), el('span', 'arm-status', friendly(arm.status || 'not_run')));
-      card.append(label, el('h3', '', arm.name || 'Unnamed arm'), el('p', 'arm-method', arm.method || 'Method pending'), el('p', 'arm-provider', arm.provider || 'Provider pending'));
+      card.append(label, el('h3', '', arm.name || 'Unnamed arm'), el('p', 'arm-method', arm.method || 'Method pending'));
+      const completed = number(arm.completed);
+      const planned = number(arm.planned);
+      if (completed !== null && planned !== null && planned > 0) {
+        const progress = el('div', 'arm-progress');
+        const caption = el('div', 'arm-progress-caption');
+        caption.append(el('strong', '', `${count(completed)} / ${count(planned)}`), el('span', '', 'completed'));
+        const meter = el('progress');
+        meter.max = planned; meter.value = completed;
+        meter.setAttribute('aria-label', `Arm ${arm.id}: ${count(completed)} of ${count(planned)} completed`);
+        progress.append(caption, meter);
+        if (number(arm.failed) > 0) progress.append(el('span', 'arm-failures', `${count(arm.failed)} failed requests`));
+        card.append(progress);
+      }
+      card.append(el('p', 'arm-provider', arm.provider || 'Provider pending'));
       if (arm.provenance) card.append(el('p', 'arm-provenance', arm.provenance));
       list.append(card);
     }
@@ -196,7 +212,7 @@
     const d = data.data || {};
     for (const [id, value] of Object.entries({'train-count':d.train, 'dev-count':d.dev, 'train-tokens':d.train_tokens, 'max-tokens':d.max_tokens, 'reviewed-count':d.reviewed, 'rejected-count':d.rejected, 'mmlu-count':d.pilot?.mmlu, 'harmbench-count':d.pilot?.harmbench, 'xstest-count':d.pilot?.xstest, 'reserved-count':d.reserved_final})) text(id, count(value));
     const verified = data.verification || {};
-    text('verification', number(verified.tests) !== null ? `${count(verified.tests)} checks ${verified.passed ? 'passed' : 'need attention'}` : 'Verification pending');
+    text('verification', number(verified.tests) !== null ? `${count(verified.tests)} checks ${verified.passed === true ? 'passed' : verified.passed === false ? 'need attention' : 'awaiting verification'}` : 'Verification pending');
     $('verification').className = 'verification' + (verified.passed === true ? ' passed' : verified.passed === false ? ' failed' : '');
     renderArms(data.arms);
     renderProgress(data.progress);
@@ -229,19 +245,27 @@
       if (!response.ok) throw new Error(`Status ${response.status}`);
       const data = await response.json();
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid snapshot');
-      render(data);
+      const sourceWarning = data.stale === true;
+      if (!sourceWarning) {
+        render(data);
+      } else if (!snapshot) {
+        // A partial first response must not turn unavailable sources into zeros.
+        const unknownCosts = Object.fromEntries(Object.entries(data.cost || {}).map(([provider, cost]) => [provider, {...cost, settled:null, reserved:null, note:'Source unavailable; amounts are unknown.'}]));
+        render({...data, data:{}, metrics:[], cost:unknownCosts, verification:{}, headline:'Some status sources are unavailable', summary:'Waiting for a complete snapshot. Unavailable counts and amounts remain unknown.'});
+      }
       receivedAt = new Date();
-      $('connection').className = 'connection connected';
-      $('connection').replaceChildren(el('i'), document.createTextNode('Live snapshot'));
-      text('refresh-time', `Received ${receivedAt.toLocaleTimeString()}`);
-      text('footer-status', 'Connected · Updates every 5 seconds');
-      $('stale').hidden = true;
+      $('connection').className = sourceWarning ? 'connection failed' : 'connection connected';
+      $('connection').replaceChildren(el('i'), document.createTextNode(sourceWarning ? 'Source warning' : 'Live snapshot'));
+      text('refresh-time', `Received ${clockTime(receivedAt)}`);
+      text('footer-status', sourceWarning ? 'Connected · Some status sources are incomplete' : 'Connected · Updates every 5 seconds');
+      $('stale').hidden = !sourceWarning;
+      if (sourceWarning) $('stale').textContent = 'Some status sources could not be read. Showing the last complete snapshot where available; retrying automatically.';
     } catch {
       $('connection').className = 'connection failed';
       $('connection').replaceChildren(el('i'), document.createTextNode(snapshot ? 'Snapshot stale' : 'Connecting'));
       $('stale').hidden = false;
       $('stale').textContent = snapshot ? 'Connection interrupted. Showing the last received snapshot; retrying automatically.' : 'Waiting for the local status service. This page will reconnect automatically.';
-      text('footer-status', receivedAt ? `Last received ${receivedAt.toLocaleTimeString()}` : 'No snapshot received');
+      text('footer-status', receivedAt ? `Last received ${clockTime(receivedAt)}` : 'No snapshot received');
     } finally {
       clearTimeout(timeout); inFlight = false; $('refresh').disabled = false;
     }

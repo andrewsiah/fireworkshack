@@ -58,15 +58,28 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
                 "pending": evaluation.get("pending", 0),
             }
         )
+        groups = []
         for suite in sorted(
             {s["suite"] for s in scores} | set(evaluation.get("by_suite", {}))
         ):
+            if suite == "xstest":
+                continue
             suite_scores = [s for s in scores if s["suite"] == suite]
             total = (
                 evaluation.get("by_suite", {})
                 .get(suite, {})
                 .get("total", len(suite_scores))
             )
+            groups.append((suite, suite_scores, total))
+        for category, counts in evaluation.get("by_category", {}).items():
+            base, _, stratum = category.partition("/")
+            selected = [
+                s
+                for s in scores
+                if s["suite"] == base and str(s.get("category")) == stratum
+            ]
+            groups.append((category, selected, counts["total"]))
+        for suite, suite_scores, total in groups:
             for metric, field in (
                 ("capability", "capability_correct"),
                 ("refusal", "refusal"),
@@ -75,6 +88,10 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
                 ("truncated", "truncated"),
             ):
                 if metric == "capability" and suite != "mmlu":
+                    continue
+                if suite == "mmlu" and metric in ("refusal", "harmful_compliance"):
+                    continue
+                if suite == "xstest/safe" and metric == "harmful_compliance":
                     continue
                 known = [
                     s[field] for s in suite_scores if isinstance(s.get(field), bool)
@@ -99,6 +116,30 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
                         "interval": wilson(good, denominator),
                     }
                 )
+    correct = {arm: {} for arm in ("A", "B", "C")}
+    for evaluation in evaluations:
+        for score in evaluation.get("scores", []):
+            if score.get("suite") == "mmlu" and isinstance(
+                score.get("capability_correct"), bool
+            ):
+                correct[evaluation["arm"]][score["item_id"]] = score[
+                    "capability_correct"
+                ]
+    report["paired_capability"] = []
+    for arm, reference in [("B", "A"), ("C", "A"), ("B", "C")]:
+        ids = sorted(correct[arm].keys() & correct[reference].keys())
+        if ids:
+            gains = sum(correct[arm][i] and not correct[reference][i] for i in ids)
+            losses = sum(correct[reference][i] and not correct[arm][i] for i in ids)
+            report["paired_capability"].append(
+                {
+                    "pair": f"{arm} - {reference}",
+                    "matched_items": len(ids),
+                    "gains": gains,
+                    "losses": losses,
+                    "difference": (gains - losses) / len(ids),
+                }
+            )
     paths = {
         key: output_dir / name
         for key, name in (
@@ -136,6 +177,12 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
         "|---|---|",
     ]
     lines += [f"| {a} | {status} |" for a, status in report["arms"].items()]
+    if report["paired_capability"]:
+        lines += ["", "Paired capability differences on common pilot IDs:", ""]
+        lines += [
+            f"- {p['pair']}: {p['difference'] * 100:+.2f} percentage points; {p['gains']} gains / {p['losses']} losses across {p['matched_items']} matched items."
+            for p in report["paired_capability"]
+        ]
     lines += [
         "",
         f"Settled usage estimate: ${account['spent_usd']}; unsettled reservations: ${account['reserved_usd']}.",
@@ -203,6 +250,8 @@ def build_report(state, output_dir: Path, *, evaluations=None, readiness=None):
 
 
 def _chart(report, path):
+    if report["metrics"]:
+        return _measured_chart(report, path)
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11})
     fig, axes = plt.subplots(
         1,
@@ -305,4 +354,181 @@ def _chart(report, path):
     )
     fig.tight_layout(rect=(0.04, 0.07, 0.98, 0.9))
     fig.savefig(path, dpi=160, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def _measured_chart(report, path):
+    colors = {"A": "#6f8694", "B": "#087e83", "C": "#315bd4"}
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), facecolor="#f2f6f8")
+    fig.suptitle(
+        "DeepSeek comparison · locked development pilot",
+        x=0.07,
+        ha="left",
+        fontsize=19,
+        fontweight="bold",
+        color="#173345",
+    )
+    for ax, suite, metric, title in [
+        (axes[0, 0], "mmlu", "capability", "Capability · MMLU"),
+        (axes[0, 1], "xstest/safe", "refusal", "Benign overrefusal · XSTest safe"),
+    ]:
+        for i, arm in enumerate(("A", "B", "C")):
+            row = next(
+                (
+                    r
+                    for r in report["metrics"]
+                    if r["arm"] == arm and r["suite"] == suite and r["metric"] == metric
+                ),
+                None,
+            )
+            if row and row["rate"] is not None:
+                lo, hi = row["interval"]
+                rate = row["rate"]
+                ax.errorbar(
+                    rate * 100,
+                    i,
+                    xerr=[[(rate - lo) * 100], [(hi - rate) * 100]],
+                    fmt="o",
+                    color=colors[arm],
+                    capsize=4,
+                    markersize=8,
+                )
+                ax.text(
+                    102,
+                    i,
+                    f"{row['successes']}/{row['rate_denominator']}",
+                    va="center",
+                    color=colors[arm],
+                    fontsize=10,
+                    clip_on=False,
+                )
+            else:
+                ax.text(
+                    3,
+                    i,
+                    "Not measured / not judged",
+                    va="center",
+                    fontsize=10,
+                    color="#6f8694",
+                )
+        ax.set_yticks(range(3), ["A · Original", "B · Our LoRA", "C · Refuseless"])
+        ax.invert_yaxis()
+        ax.set_ylim(2.5, -0.5)
+        ax.set_xlim(-2, 100)
+        ax.set_title(title, loc="left", fontsize=13, fontweight="bold")
+        ax.set_xlabel(
+            "Correct answers (%)"
+            if metric == "capability"
+            else "Refusals on benign requests (%)"
+        )
+        ax.grid(axis="x", color="#d7e2e8", linewidth=0.7)
+        ax.set_axisbelow(True)
+    ax = axes[1, 0]
+    total_max = 16
+    for i, arm in enumerate(("A", "B", "C")):
+        row = next(
+            (
+                r
+                for r in report["metrics"]
+                if r["arm"] == arm
+                and r["suite"] == "harmbench"
+                and r["metric"] == "harmful_compliance"
+            ),
+            None,
+        )
+        if row:
+            yes = row["successes"]
+            no = row["scored"] - yes
+            unknown = row["unknown"]
+            total_max = max(total_max, row["total"])
+            ax.barh(i, yes, color="#b96862", height=0.52)
+            ax.barh(i, no, left=yes, color="#7f9e99", height=0.52)
+            ax.barh(i, unknown, left=yes + no, color="#dce3e8", height=0.52)
+            ax.text(
+                row["total"] + 0.2,
+                i,
+                f"{yes} positive; {unknown} unknown",
+                va="center",
+                fontsize=9,
+                color="#526476",
+            )
+        else:
+            ax.text(0.2, i, "Not measured", va="center", fontsize=10, color="#6f8694")
+    ax.set_yticks(range(3), ["A · Original", "B · Our LoRA", "C · Refuseless"])
+    ax.set_ylim(2.5, -0.5)
+    ax.set_xlim(0, total_max)
+    ax.set_xlabel("Pilot items (count)")
+    ax.set_title(
+        "HarmBench · complete harmful assistance",
+        loc="left",
+        fontsize=13,
+        fontweight="bold",
+    )
+    from matplotlib.patches import Patch
+
+    ax.legend(
+        handles=[
+            Patch(color="#b96862", label="Positive"),
+            Patch(color="#7f9e99", label="Negative"),
+            Patch(color="#dce3e8", label="Unjudged / incomplete"),
+        ],
+        fontsize=8,
+        loc="lower left",
+        bbox_to_anchor=(-0.03, -0.43),
+        ncol=3,
+        frameon=False,
+    )
+    ax = axes[1, 1]
+    providers = report["accounting"].get("providers", {})
+    if providers:
+        for i, provider in enumerate(("fireworks", "refuseless")):
+            pool = providers.get(provider, {})
+            known = float(pool.get("spent_usd", 0))
+            held = float(pool.get("reserved_usd", 0))
+            ax.barh(i, known, color="#087e83", height=0.5)
+            ax.barh(i, held, left=known, color="#dce3e8", height=0.5)
+            ax.text(
+                known + held + 0.03,
+                i,
+                f"${known:.4f} estimate + ${held:.3f} held",
+                va="center",
+                fontsize=9,
+                color="#526476",
+            )
+        ax.set_yticks([0, 1], ["Fireworks", "Refuseless"])
+        ax.set_ylim(1.6, -0.6)
+        ax.set_xlim(
+            0,
+            max(
+                4.25,
+                max(
+                    float(p.get("spent_usd", 0)) + float(p.get("reserved_usd", 0))
+                    for p in providers.values()
+                )
+                * 1.1,
+            ),
+        )
+        ax.set_xlabel("USD · estimates and reservations")
+        ax.set_title(
+            "Accounting · reserved is not charged",
+            loc="left",
+            fontsize=13,
+            fontweight="bold",
+        )
+    else:
+        ax.axis("off")
+        ax.text(0.1, 0.5, "Provider accounting unavailable", transform=ax.transAxes)
+    for ax in axes.flat:
+        ax.set_facecolor("#f2f6f8")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    fig.text(
+        0.07,
+        0.015,
+        "Source: measured pilot outputs + versioned agent audit. Whiskers: 95% Wilson intervals. Unknowns are not negative results.\nC is user-attributed Dealign; exact checkpoint unverified. Generated-letter MMLU differs from published logit scoring.",
+        fontsize=9,
+        color="#526476",
+    )
+    fig.tight_layout(rect=(0.02, 0.07, 0.98, 0.94), h_pad=3, w_pad=3)
+    fig.savefig(path, dpi=170, facecolor=fig.get_facecolor())
     plt.close(fig)

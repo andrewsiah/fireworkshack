@@ -112,3 +112,15 @@ def test_sdk_arms_force_complete_attempt_reservation(pilot):
     assert {arm["name"] for arm in sdk_arms} == {"A", "B"}
     assert all(arm["maximum_cost_multiplier"] == 7 for arm in sdk_arms)
     assert all(arm["usage_accounts_for_all_attempts"] is False for arm in sdk_arms)
+
+
+def test_recovery_does_not_replay_paid_baselines(pilot,monkeypatch):
+    config,approval,_service,captured,directory=pilot
+    config['baseline_files']={'explicit_recovery':True}
+    records=[(arm,track,{'arm':arm,'source':'measured','scores':[],'baseline_source_sha256':'test'})
+             for arm in ('A','C') for track in ('capability','behavior')]
+    monkeypatch.setattr(runner,'verify_recovery_baselines',lambda *_args:records)
+    runner.run_pilot(config,directory,approval)
+    assert captured and {a['name'] for a in captured}=={'B'}
+    assert (directory/'A-capability.json').exists()
+    assert (directory/'C-behavior.json').exists()

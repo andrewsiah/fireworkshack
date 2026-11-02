@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .evaluate import evaluate
+from .providers import protocol_hash
 from .report import build_report
 from .state import RunState
 from .train import (
@@ -63,6 +64,70 @@ class CombinedLedger:
 
     def summary(self):
         return pool_summary(self.states)
+
+
+class LedgerGroup:
+    def __init__(self, *ledgers):
+        self.ledgers = ledgers
+
+    def summary(self):
+        values = [s.summary() for s in self.ledgers]
+        return {
+            "spent_usd": str(
+                sum((Decimal(s["spent_usd"]) for s in values), Decimal(0))
+            ),
+            "reserved_usd": str(
+                sum((Decimal(s["reserved_usd"]) for s in values), Decimal(0))
+            ),
+            "operation_count": sum(s["operation_count"] for s in values),
+            "pending_operations": [
+                op for s in values for op in s.get("pending_operations", [])
+            ],
+            "budget_breaches": [
+                e for s in values for e in s.get("budget_breaches", [])
+            ],
+        }
+
+
+def verify_recovery_baselines(config, manifest):
+    files = config.get("baseline_files", {})
+    if set(files) != {
+        f"{arm}-{track}" for arm in ("A", "C") for track in ("capability", "behavior")
+    }:
+        raise ValueError("all four hash-bound baseline files required")
+    records = []
+    for arm in ("A", "C"):
+        for track in ("capability", "behavior"):
+            ref = files[f"{arm}-{track}"]
+            record = load_private_manifest(ref["path"], ref["sha256"])
+            if record.get("source") != "measured" or record.get("arm") != arm:
+                raise ValueError("baseline source or arm differs")
+            if record.get("protocol_hash") != protocol_hash(config["tracks"][track]):
+                raise ValueError("baseline protocol differs")
+            items = [
+                i
+                for i in manifest["pilot"]
+                if (i["suite"] == "mmlu") == (track == "capability")
+            ]
+            if record.get("items") != items or len(record.get("results", [])) != len(
+                items
+            ):
+                raise ValueError("baseline items differ from frozen evaluation")
+            if (
+                record.get("errors", 0)
+                or record.get("pending", 0)
+                or record.get("missing", 0)
+            ):
+                raise ValueError("baseline is incomplete")
+            if any(
+                r.get("model") != config["arms"][arm]["model"]
+                for r in record["results"]
+            ):
+                raise ValueError("baseline model differs")
+            record["baseline_source_sha256"] = ref["sha256"]
+            record["baseline_reused"] = True
+            records.append((arm, track, record))
+    return records
 
 
 def load_runtime_credentials():
@@ -120,6 +185,17 @@ def _run_pilot(config, run_dir, approval):
         raise ValueError("exact paid-plan approval is required")
     data = load_private_manifest(config["data_manifest"], config["data_sha256"])
     manifest = load_private_manifest(config["eval_manifest"], config["eval_sha256"])
+    recovered = (
+        verify_recovery_baselines(config, manifest)
+        if config.get("baseline_files")
+        else []
+    )
+    previous = {}
+    for provider, reference in config.get("previous_ledgers", {}).items():
+        raw = Path(reference["path"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+            raise ValueError("previous ledger hash differs from recovery plan")
+        previous[provider] = RunState(Path(reference["path"]))
     # Complete local readiness validation BEFORE SDK session construction.
     train_sft(config, data, None, dry_run=True)
     if len(manifest["pilot"]) != 89:
@@ -133,6 +209,13 @@ def _run_pilot(config, run_dir, approval):
         cap = Decimal(str(budgets[provider]))
         if not cap.is_finite() or cap <= 0 or cap > Decimal(user_cap):
             raise ValueError("provider budget exceeds user ceiling")
+        if provider in previous:
+            summary = previous[provider].summary()
+            bound = (
+                Decimal(summary["spent_usd"]) + Decimal(summary["reserved_usd"]) + cap
+            )
+            if bound > Decimal(str(config["cumulative_provider_caps"][provider])):
+                raise ValueError("cumulative provider budget exceeded")
     if sum((Decimal(str(v)) for v in budgets.values()), Decimal(0)) > Decimal(
         str(config["budget_usd"])
     ):
@@ -161,6 +244,10 @@ def _run_pilot(config, run_dir, approval):
     }
     for state in states.values():
         state.assert_dispatchable()
+    reporting_states = {
+        name: LedgerGroup(state, previous[name]) if name in previous else state
+        for name, state in states.items()
+    }
     private_json(
         run_dir / "controller.json",
         {
@@ -198,10 +285,21 @@ def _run_pilot(config, run_dir, approval):
     try:
         # Independent C remains a useful measured baseline if Fireworks capacity
         # later proves unavailable. No dataset or provider substitution occurs.
-        measure("C", config["arms"]["C"], states["refuseless"])
+        if recovered:
+            for arm, track, record in recovered:
+                evaluations.append(record)
+                private_json(run_dir / f"{arm}-{track}.json", record)
+                states["fireworks"].record(
+                    {
+                        "type": "baseline_reused",
+                        "arm": arm,
+                        "track": track,
+                        "source_sha256": record["baseline_source_sha256"],
+                    }
+                )
+        else:
+            measure("C", config["arms"]["C"], states["refuseless"])
         session = open_session(config, data, states["fireworks"])
-        base_sampler = make_base_sampler(session["service"], renderer)
-        callbacks.append(base_sampler)
         base_arm = {
             **config["arms"]["A"],
             "provider": "fireworks_checkpoint",
@@ -213,7 +311,10 @@ def _run_pilot(config, run_dir, approval):
             "maximum_cost_multiplier": 7,
             "usage_accounts_for_all_attempts": False,
         }
-        measure("A", base_arm, states["fireworks"], base_sampler)
+        if not recovered:
+            base_sampler = make_base_sampler(session["service"], renderer)
+            callbacks.append(base_sampler)
+            measure("A", base_arm, states["fireworks"], base_sampler)
         checkpoint = train_sft(
             config, data, states["fireworks"], dry_run=False, session=session
         )
@@ -252,7 +353,7 @@ def _run_pilot(config, run_dir, approval):
         report_exported = False
         try:
             artifacts = build_report(
-                CombinedLedger(states),
+                CombinedLedger(reporting_states),
                 run_dir / "report",
                 evaluations=evaluations,
                 readiness=readiness,
@@ -271,7 +372,7 @@ def _run_pilot(config, run_dir, approval):
                     {
                         "status": "report_export_failed",
                         "evaluations": evaluations,
-                        "accounting": pool_summary(states),
+                        "accounting": pool_summary(reporting_states),
                     },
                 )
                 report_exported = True
@@ -310,7 +411,7 @@ def _run_pilot(config, run_dir, approval):
         "status": "incomplete" if failure else "completed_generations",
         "exception_type": failure,
         "elapsed_seconds": time.monotonic() - started,
-        "accounting": pool_summary(states),
+        "accounting": pool_summary(reporting_states),
         "artifacts": {k: str(v) for k, v in artifacts.items()},
         "behavior_judging": "pending independent per-output review",
         "comparison_provenance": config["arms"]["C"].get("provenance"),

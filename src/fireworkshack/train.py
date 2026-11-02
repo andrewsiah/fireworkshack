@@ -7,12 +7,16 @@ constructed until all local validation and the caller's budget gate pass.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import copy
 import hashlib
 import importlib.util
 import json
 import math
+import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -28,6 +32,122 @@ SDK_MAX_SAMPLE_ATTEMPTS = 7
 
 class TrainingNotReady(ValueError):
     """Local data/protocol prerequisites are not satisfied."""
+
+
+def wait_for_training_phase(
+    future: Any,
+    state: Any,
+    *,
+    operation_id: str,
+    phase: str,
+    timeout_seconds: float,
+    heartbeat_seconds: float = 10,
+) -> Any:
+    """Wait on one submitted future; heartbeat timeouts never resubmit it.
+
+    The production SDK exposes result_async(), whose underlying operation is
+    shielded from caller timeouts. One local task observes that same future;
+    asyncio.wait leaves it running between heartbeat intervals. A deadline
+    expiry is an unknown remote outcome, not a failed or canceled update.
+    Synchronous injected test doubles retain their existing result() contract.
+    """
+    if (
+        isinstance(timeout_seconds, bool)
+        or not math.isfinite(timeout_seconds)
+        or not 0 < timeout_seconds <= 600
+        or not math.isfinite(heartbeat_seconds)
+        or heartbeat_seconds <= 0
+    ):
+        raise TrainingNotReady(
+            "Training phase wait must be positive and at most600 seconds"
+        )
+    started = time.monotonic()
+    limit = started + timeout_seconds
+    deadline = getattr(state, "deadline", None)
+    if deadline is not None:
+        if isinstance(deadline, str):
+            deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        if deadline.tzinfo is None:
+            raise TrainingNotReady("Run deadline must include a timezone")
+        limit = min(limit, started + (deadline - datetime.now(UTC)).total_seconds())
+    identity = {
+        "operation_id": operation_id,
+        "phase": phase,
+        "phase_id": f"{operation_id}:{phase}",
+    }
+
+    def record(kind: str, **extra: Any) -> None:
+        state.record(
+            {
+                "type": kind,
+                **identity,
+                "elapsed_seconds": max(0.0, time.monotonic() - started),
+                **extra,
+            }
+        )
+
+    def remaining() -> float:
+        left = limit - time.monotonic()
+        if left <= 0:
+            record("training_phase_wait_expired", remote_outcome="unknown")
+            raise TimeoutError(
+                "Training phase wait limit or run deadline reached; remote outcome unknown"
+            )
+        return left
+
+    remaining()
+    record(
+        "training_phase_started",
+        timeout_seconds=timeout_seconds,
+        effective_wait_seconds=max(0.0, limit - started),
+        server_request_id=None,
+    )
+
+    async def observe_async() -> Any:
+        task = asyncio.create_task(future.result_async())
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {task}, timeout=min(heartbeat_seconds, remaining())
+                )
+                if done:
+                    # A completed operation raising TimeoutError is a terminal
+                    # operation error, not another local heartbeat interval.
+                    return task.result()
+                record("training_phase_heartbeat", remote_outcome="pending")
+        finally:
+            if not task.done():
+                task.cancel()  # local observer only; never future.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    try:
+        if callable(getattr(future, "result_async", None)):
+            result = asyncio.run(observe_async())
+        else:
+            while True:
+                interval = min(heartbeat_seconds, remaining())
+                try:
+                    result = future.result(timeout=interval)
+                    break
+                except TimeoutError:
+                    # Public concurrent-future access is available on the SDK
+                    # wrapper; distinguish an actual completed exception where
+                    # supported by an injected synchronous future as well.
+                    underlying = getattr(future, "future", None)
+                    if callable(underlying) and underlying().done():
+                        raise
+                    record("training_phase_heartbeat", remote_outcome="pending")
+    except Exception as error:
+        if not isinstance(error, TimeoutError) or time.monotonic() < limit:
+            record(
+                "training_phase_failed",
+                exception_type=type(error).__name__,
+                remote_outcome="unknown",
+            )
+        raise
+    record("training_phase_complete")
+    return result
 
 
 @dataclass(frozen=True)
@@ -239,6 +359,16 @@ def _validate(config: dict, data: dict) -> tuple[dict, list[dict], int]:
         raise TrainingNotReady(
             "Training price differs from the verified rate; resolve and approve again"
         )
+    timeout = c["timeout_seconds"]
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or not 0 < timeout <= 600
+    ):
+        raise TrainingNotReady(
+            "Training timeout_seconds must be positive and at most600"
+        )
     return c, rows, total
 
 
@@ -324,11 +454,29 @@ def train_sft(
         )
         # No retry on an unknown outcome. The reservation/intent survives and
         # must be reconciled against session/optimizer state before resuming.
-        fb = client.forward_backward(datums, "cross_entropy").result(
-            timeout=c["timeout_seconds"]
+        state.assert_dispatchable()
+        fb = wait_for_training_phase(
+            client.forward_backward(datums, "cross_entropy"),
+            state,
+            operation_id=operation,
+            phase="forward_backward",
+            timeout_seconds=c["timeout_seconds"],
         )
-        opt = client.optim_step(adam, emit_grad_norm_metrics=True).result(
-            timeout=c["timeout_seconds"]
+        state.assert_dispatchable()
+        state.record(
+            {
+                "type": "training_phase_intent",
+                "operation_id": operation,
+                "phase_id": f"{operation}:optim_step",
+                "phase": "optim_step",
+            }
+        )
+        opt = wait_for_training_phase(
+            client.optim_step(adam, emit_grad_norm_metrics=True),
+            state,
+            operation_id=operation,
+            phase="optim_step",
+            timeout_seconds=c["timeout_seconds"],
         )
         state.record(
             {
@@ -344,14 +492,22 @@ def train_sft(
         # The update completed, but billed USD is unknown until reconciled.
         state.settle(operation, None)
     state.record({"type": "checkpoint_intent", "name": "pilot-final"})
-    training_path = (
-        client.save_state("pilot-final").result(timeout=c["timeout_seconds"]).path
-    )
-    sampler_path = (
-        client.save_weights_for_sampler("pilot-final")
-        .result(timeout=c["timeout_seconds"])
-        .path
-    )
+    state.assert_dispatchable()
+    training_path = wait_for_training_phase(
+        client.save_state("pilot-final"),
+        state,
+        operation_id=f"{run}:checkpoint:final",
+        phase="save_state",
+        timeout_seconds=c["timeout_seconds"],
+    ).path
+    state.assert_dispatchable()
+    sampler_path = wait_for_training_phase(
+        client.save_weights_for_sampler("pilot-final"),
+        state,
+        operation_id=f"{run}:checkpoint:final",
+        phase="save_sampler",
+        timeout_seconds=c["timeout_seconds"],
+    ).path
     cp = CheckpointRef(
         BASE_MODEL,
         service.training_session_id,

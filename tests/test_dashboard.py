@@ -252,3 +252,144 @@ def test_boolean_verification_result_preserves_frontend_contract(tmp_path):
         {"verification": {"tests": 101, "passed": True}},
     )
     assert build_status(tmp_path)["verification"] == {"tests": 101, "passed": True}
+
+
+def test_live_events_override_old_preparation_headline_without_implying_training(
+    tmp_path,
+):
+    put_json(
+        tmp_path / ".local/dashboard-state.json",
+        {
+            "headline": "Baseline starts next",
+            "status": "prepared",
+            "progress": [
+                {"label": "Training data", "status": "complete", "detail": "Reviewed"},
+                {
+                    "label": "Pilot execution",
+                    "status": "pending",
+                    "detail": "Not started",
+                },
+            ],
+        },
+    )
+    run = tmp_path / "runs/pilot-1"
+    put_json(run / "controller.json", {"status": "starting"})
+    events = [
+        {
+            "utc": f"2026-11-02T21:00:{n:02d}+00:00",
+            "type": "generation",
+            "result": {
+                "operation_id": str(n),
+                "arm": "C",
+                "status": "completed",
+                "source": "measured",
+            },
+        }
+        for n in range(40)
+    ]
+    (run / "refuseless-events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events)
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["status"] == "running"
+    assert snapshot["headline"] == "Evaluating C: 40 of 89 complete"
+    assert snapshot["arms"][1]["completed"] == 0
+    assert "training completed" not in snapshot["summary"].lower()
+    assert snapshot["progress"][0]["label"] == "Training data"
+    assert snapshot["progress"][1]["status"] == "running"
+    assert "40 of 89" in snapshot["progress"][1]["detail"]
+
+
+def test_training_headline_uses_actual_completed_step_events(tmp_path):
+    run = tmp_path / "runs/pilot-1"
+    put_json(run / "controller.json", {"status": "in_progress"})
+    (run / "fireworks-events.jsonl").write_text(
+        "\n".join(
+            json.dumps(e)
+            for e in [
+                {
+                    "utc": "2026-11-02T21:00:00+00:00",
+                    "type": "training_step_complete",
+                    "step": 3,
+                },
+                {
+                    "utc": "2026-11-02T21:00:01+00:00",
+                    "type": "training_step_intent",
+                    "step": 4,
+                },
+            ]
+        )
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["status"] == "running"
+    assert snapshot["headline"] == "Training: 3 of 8 steps complete"
+    assert "step 4" in snapshot["summary"]
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("incomplete", "Pilot stopped with partial results"),
+        ("completed_generations", "Model generations complete"),
+    ],
+)
+def test_final_controller_status_overrides_static_or_prior_live_headline(
+    tmp_path, status, expected
+):
+    put_json(
+        tmp_path / ".local/dashboard-state.json",
+        {"headline": "Baseline starts next", "status": "prepared"},
+    )
+    put_json(
+        tmp_path / "runs/pilot-1/controller.json",
+        {"status": status, "exception_type": "PRIVATE_CREDENTIAL"},
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["status"] == status
+    assert snapshot["headline"] == expected
+    assert "PRIVATE_CREDENTIAL" not in json.dumps(snapshot)
+
+
+def test_invalid_controller_status_is_a_stale_source_not_server_error(tmp_path):
+    put_json(
+        tmp_path / "runs/pilot-1/controller.json",
+        {"status": {"secret": "PRIVATE_CREDENTIAL"}},
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["stale"] is True
+    assert "run_controller_invalid_schema" in snapshot["errors"]
+    assert "PRIVATE_CREDENTIAL" not in json.dumps(snapshot)
+
+
+def test_runtime_caps_and_private_task_link_have_no_public_defaults(tmp_path):
+    snapshot = build_status(tmp_path)
+    assert snapshot["cost"]["fireworks"]["cap"] is None
+    assert snapshot["cost"]["refuseless"]["cap"] is None
+    assert "linear" not in snapshot["links"]
+    put_json(
+        tmp_path / ".local/dashboard-state.json",
+        {
+            "cost": {
+                "fireworks": {"cap": 13.25, "settled": 999},
+                "refuseless": {"cap": 4.5},
+            },
+            "links": {
+                "linear": "https://linear.app/new-york-ai-labs/issue/AND-123",
+                "secret": "PRIVATE_CREDENTIAL",
+            },
+        },
+    )
+    snapshot = build_status(tmp_path)
+    assert snapshot["cost"]["fireworks"]["cap"] == 13.25
+    assert snapshot["cost"]["refuseless"]["cap"] == 4.5
+    assert snapshot["cost"]["fireworks"]["settled"] == 0
+    assert snapshot["links"]["linear"].endswith("AND-123")
+    assert "PRIVATE_CREDENTIAL" not in json.dumps(snapshot)
+
+
+@pytest.mark.parametrize("cap", [-1, True, "NaN", "Infinity", {"private": "secret"}])
+def test_invalid_overlay_cap_stays_unknown(tmp_path, cap):
+    put_json(
+        tmp_path / ".local/dashboard-state.json", {"cost": {"fireworks": {"cap": cap}}}
+    )
+    assert build_status(tmp_path)["cost"]["fireworks"]["cap"] is None

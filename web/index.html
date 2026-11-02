@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%23153648%27/%3E%3Cpath d=%27M8 7v18M16 7v18M24 7v18M8 12h8M16 20h8%27 stroke=%27%2379d3d1%27 stroke-width=%272%27/%3E%3C/svg%3E">
   <title>FireworksHack · Experiment notebook</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -46,7 +47,7 @@
 
     <section id="results" class="section results-section">
       <div class="section-heading"><div><h2>Measured results</h2><p id="results-intro">No model performance has been measured yet.</p></div><div class="result-filters"><label>Suite<select id="suite-filter" disabled><option value="all">All suites</option></select></label><label>Measure<select id="metric-filter" disabled><option value="all">All measures</option></select></label></div></div>
-      <div class="results-empty" id="results-empty"><svg viewBox="0 0 360 70" aria-hidden="true"><path class="empty-grid" d="M15 56H345M15 28H345"/><path class="empty-axis" d="M15 5V56"/><circle cx="95" cy="56" r="5"/><circle cx="185" cy="56" r="5"/><circle cx="275" cy="56" r="5"/></svg><h3>Ready to measure. No scores to claim.</h3><p>Base, adapted, and modified-model results will appear here after real requests are scored. Missing results are shown as “not run,” never as zero accuracy.</p></div>
+      <div class="results-empty" id="results-empty"><svg viewBox="0 0 360 70" aria-hidden="true"><path class="empty-grid" d="M15 56H345M15 28H345"/><path class="empty-axis" d="M15 5V56"/></svg><h3>Ready to measure. No scores to claim.</h3><p>Base, adapted, and modified-model results will appear here after real requests are scored. Missing results are shown as “not run,” never as zero accuracy.</p></div>
       <div id="metric-chart" class="metric-chart" hidden></div>
       <div class="table-scroll" id="results-table-wrap" hidden><table class="results-table"><thead><tr><th>Arm</th><th>Suite / measure</th><th>Score</th><th>Scored / total</th><th>Unknown</th><th>Interval</th></tr></thead><tbody id="results-table-body"></tbody></table></div>
       <p class="result-footnote">Refusal, harmful compliance, answer completeness, and capability are distinct outcomes. Provider-reported and newly measured scores are never merged.</p>

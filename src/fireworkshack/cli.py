@@ -78,6 +78,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--approval", type=Path)
+    parser.add_argument("--judgments", type=Path)
     parser.add_argument("--run-dir", type=Path, default=Path("runs/pilot"))
     args = parser.parse_args(argv)
     try:
@@ -91,10 +92,43 @@ def main(argv=None):
                 )
             result = preflight(config, os.environ)
         elif args.command == "report":
-            state = RunState(args.run_dir / "events.jsonl")
+            from .runner import CombinedLedger
+
+            states = {
+                provider: RunState(args.run_dir / (provider + "-events.jsonl"))
+                for provider in ("fireworks", "refuseless")
+                if (args.run_dir / (provider + "-events.jsonl")).exists()
+            }
+            state = (
+                CombinedLedger(states)
+                if states
+                else RunState(args.run_dir / "events.jsonl")
+            )
+            evaluations = [
+                _json(args.run_dir / f"{arm}-{track}.json")
+                for arm in ("A", "B", "C")
+                for track in ("capability", "behavior")
+                if (args.run_dir / f"{arm}-{track}.json").exists()
+            ]
+            if args.judgments:
+                from .evaluate import score, summarize
+
+                judge = _json(args.judgments)
+                for evaluation in evaluations:
+                    scores = [
+                        score(item, result, judge)
+                        for item, result in zip(
+                            evaluation["items"], evaluation["results"]
+                        )
+                    ]
+                    evaluation.update(
+                        summarize(evaluation["items"], scores), scores=scores
+                    )
             result = {
                 key: str(path)
-                for key, path in build_report(state, args.run_dir / "report").items()
+                for key, path in build_report(
+                    state, args.run_dir / "report", evaluations=evaluations
+                ).items()
             }
         elif not args.execute:
             result = dry_plan(config)
